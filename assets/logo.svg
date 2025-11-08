@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0ea5e9"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+  </defs>
+  <rect rx="18" ry="18" x="8" y="8" width="112" height="112" fill="#0b1220" stroke="#1f2c44" stroke-width="4"/>
+  <g transform="translate(24,24)">
+    <rect x="0" y="16" width="40" height="64" rx="6" fill="url(#g)" />
+    <rect x="48" y="0" width="32" height="48" rx="6" fill="#7dd3fc"/>
+    <rect x="48" y="56" width="32" height="24" rx="6" fill="#22d3ee"/>
+  </g>
+  <text x="64" y="116" font-family="monospace" font-size="10" text-anchor="middle" fill="#7dd3fc">Rust Plugin Studio (AI)</text>
+</svg>

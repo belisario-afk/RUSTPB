@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Rust Plugin Studio (AI)</title>
+  <meta name="description" content="Create, refine, and debug C# plugins for Rust (Oxide/uMod or Carbon) with AI. BYO OpenAI API key. Non-destructive patches only."/>
+  <link rel="icon" type="image/svg+xml" href="./assets/logo.svg">
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div id="banner" class="banner">
+    Bring Your Own OpenAI API Key. Stored only in your browser. Never sent to our servers. Use at your own risk.
+  </div>
+  <header class="topbar">
+    <div class="brand">
+      <img src="./assets/logo.svg" alt="logo" width="22" height="22"/>
+      <span>Rust Plugin Studio (AI)</span>
+    </div>
+    <div class="controls">
+      <button id="btnApiKey" class="btn primary" title="Set your OpenAI API key">
+        <img src="./assets/icon-key.svg" alt="" width="16" height="16"/> BYO API Key
+      </button>
+      <label class="control">
+        <span>Framework</span>
+        <select id="frameworkSelect">
+          <option value="oxide">Oxide/uMod</option>
+          <option value="carbon">Carbon</option>
+        </select>
+      </label>
+      <label class="control">
+        <span>Model</span>
+        <select id="modelSelect">
+          <option value="auto">Auto (GPT‑5 → 4o → 4o-mini)</option>
+          <option value="gpt-5-mini">gpt‑5‑mini</option>
+          <option value="gpt-5-chat-latest">gpt‑5‑chat‑latest</option>
+          <option value="gpt-4o">gpt‑4o</option>
+          <option value="gpt-4o-mini">gpt‑4o‑mini</option>
+        </select>
+      </label>
+      <details id="costGuard" class="details-pill">
+        <summary>Cost Guard</summary>
+        <div class="panel">
+          <label class="switch">
+            <input id="onlyUncertainToggle" type="checkbox"/>
+            <span>Only send uncertain changes to AI</span>
+          </label>
+          <label class="switch">
+            <input id="categoryOnlyToggle" type="checkbox"/>
+            <span>Category-only output (summaries)</span>
+          </label>
+          <label class="control">
+            <span>Max files per op</span>
+            <input id="maxFilesInput" type="number" min="1" value="20"/>
+          </label>
+          <div class="stats">
+            <div>Estimated tokens (last): <span id="tokenEstimate">0</span></div>
+            <div>Requests this session: <span id="requestCount">0</span></div>
+          </div>
+        </div>
+      </details>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="left-panel">
+      <div class="section">
+        <h3>Describe your plugin</h3>
+        <textarea id="promptInput" rows="8" placeholder="Example: A simple /home teleport plugin with cooldown and permissions."></textarea>
+      </div>
+
+      <div class="section">
+        <h3>Options</h3>
+        <label class="control full">
+          <span>Plugin Name</span>
+          <input id="pluginNameInput" type="text" placeholder="MyPlugin"/>
+        </label>
+        <label class="control full">
+          <span>Author</span>
+          <input id="authorInput" type="text" placeholder="YourName"/>
+        </label>
+        <label class="control full">
+          <span>Version</span>
+          <input id="versionInput" type="text" value="1.0.0"/>
+        </label>
+        <label class="control full">
+          <span>Permissions (comma-separated)</span>
+          <input id="permissionsInput" type="text" placeholder="myplugin.use,myplugin.admin"/>
+        </label>
+        <label class="control full">
+          <span>Hooks</span>
+          <select id="hooksSelect" multiple size="6">
+            <option>OnServerInitialized</option>
+            <option>OnPlayerInit</option>
+            <option>OnPlayerChat</option>
+            <option>OnPlayerDisconnected</option>
+            <option>CanUseLockedEntity</option>
+            <option>OnEntityTakeDamage</option>
+          </select>
+        </label>
+        <label class="switch">
+          <input id="safetyModeToggle" type="checkbox" checked />
+          <span>Safety mode (restrict sensitive operations)</span>
+        </label>
+      </div>
+
+      <div class="section actions">
+        <button id="btnGenerate" class="btn primary">Generate Plugin</button>
+        <button id="btnRefine" class="btn">Refine/Improve</button>
+        <button id="btnSuggestTests" class="btn">Suggest Tests</button>
+        <button id="btnExplain" class="btn">Explain Code</button>
+        <button id="btnCreatePatch" class="btn warn">Create Patch (Non‑Destructive Fix)</button>
+      </div>
+
+      <div class="section">
+        <h3>Snapshots</h3>
+        <div class="snapshot-controls">
+          <button id="btnSaveSnapshot" class="btn small">Save Snapshot (Ctrl/Cmd+S)</button>
+          <button id="btnClearSnapshots" class="btn small">Clear All</button>
+        </div>
+        <ul id="snapshotList" class="snapshot-list"></ul>
+      </div>
+    </aside>
+
+    <section class="main-panel">
+      <div class="tabs">
+        <button data-tab="editor" class="tab active">Editor</button>
+        <button data-tab="output" class="tab">Output</button>
+        <button data-tab="patches" class="tab">Patches</button>
+        <button data-tab="checks" class="tab">Tests/Checks</button>
+        <button data-tab="changelog" class="tab">Changelog</button>
+      </div>
+
+      <div class="tabpanes">
+        <div id="tab-editor" class="tabpane active">
+          <div id="editor" class="editor"></div>
+        </div>
+        <div id="tab-output" class="tabpane">
+          <div class="history-header">
+            <span>Action History</span>
+            <button id="btnClearHistory" class="btn small">Clear</button>
+          </div>
+          <div id="outputHistory" class="history"></div>
+        </div>
+        <div id="tab-patches" class="tabpane">
+          <div class="patch-actions">
+            <button id="btnApplyPatch" class="btn primary">Apply Patch</button>
+            <button id="btnDryRunPatch" class="btn">Dry‑Run</button>
+          </div>
+          <textarea id="patchPreview" class="patch-preview" spellcheck="false" placeholder="Unified diff will appear here..."></textarea>
+          <div id="bigChangeWarning" class="warning hidden">This is a big change. More than 20% lines touched or >10% deletions. Confirm before applying.</div>
+        </div>
+        <div id="tab-checks" class="tabpane">
+          <div id="checksList" class="checks"></div>
+        </div>
+        <div id="tab-changelog" class="tabpane">
+          <ul id="changelogList" class="changelog"></ul>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div class="quick-actions">
+    <button id="qaGenerate" title="Generate Plugin (Ctrl/Cmd+Enter)">Generate</button>
+    <button id="qaRefine" title="Refine/Improve">Refine</button>
+    <button id="qaPatch" title="Create Patch">Patch</button>
+    <button id="qaTests" title="Suggest Tests">Tests</button>
+    <button id="qaExplain" title="Explain Code">Explain</button>
+  </div>
+
+  <footer class="statusbar">
+    <div>Model in use: <span id="statusModel">auto</span></div>
+    <div>Batch: <span id="statusBatch">0</span></div>
+    <div>Last tokens: <span id="statusTokens">0</span></div>
+    <div>Cost Guard: <span id="statusCostGuard">OFF</span></div>
+  </footer>
+
+  <!-- API Key Modal -->
+  <dialog id="apiKeyModal" class="modal">
+    <form method="dialog">
+      <h3>OpenAI API Key</h3>
+      <p>Your key is stored only in your browser (localStorage). You can clear it at any time.</p>
+      <input id="apiKeyInput" type="password" placeholder="sk-..." autocomplete="off"/>
+      <div class="modal-actions">
+        <button id="btnSaveKey" class="btn primary">Save</button>
+        <button id="btnClearKey" class="btn warn">Clear Key</button>
+        <button class="btn">Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Libraries -->
+  <script src="./lib/diff-match-patch.min.js"></script>
+
+  <!-- Monaco via CDN (preferred) -->
+  <script>
+    window.__monacoBase = "https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min";
+  </script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js" integrity="sha512-y6R0M7zOT7AwmJQx9zDqfQe7dkL+JnfH1ExyCmiVvT0J7aG9P4mxBavwq9KvC4K7k6JbQ8b6s2Xn53b1VNxb8A==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script>
+    require.config({ paths: { 'vs': window.__monacoBase + '/vs' }});
+    window.monacoReady = new Promise((resolve) => {
+      require(['vs/editor/editor.main'], () => resolve(window.monaco));
+    });
+  </script>
+
+  <!-- App (ES modules) -->
+  <script type="module" src="./js/rateLimit.js"></script>
+  <script type="module" src="./js/storage.js"></script>
+  <script type="module" src="./js/templates.js"></script>
+  <script type="module" src="./js/validators.js"></script>
+  <script type="module" src="./js/patcher.js"></script>
+  <script type="module" src="./js/ai.js"></script>
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
