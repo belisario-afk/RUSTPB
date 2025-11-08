@@ -31,24 +31,56 @@ function toast(msg, type=''){
 }
 
 async function initMonaco(){
-  await window.monacoReady;
-  editor = monaco.editor.create(el('editor'), {
-    value: storage.getAutosave() || getInitialTemplate(currentFramework, {
-      name: 'MyPlugin',
-      author: 'YourName',
-      version: '1.0.0'
-    }),
-    language: 'csharp',
-    theme: 'vs-dark',
-    automaticLayout: true,
-    glyphMargin: true,
-    fontSize: 14,
-    minimap: { enabled: false }
+  try{
+    await window.monacoReady;
+    editor = monaco.editor.create(el('editor'), {
+      value: storage.getAutosave() || getInitialTemplate(currentFramework, {
+        name: 'MyPlugin',
+        author: 'YourName',
+        version: '1.0.0'
+      }),
+      language: 'csharp',
+      theme: 'vs-dark',
+      automaticLayout: true,
+      glyphMargin: true,
+      fontSize: 14,
+      minimap: { enabled: false }
+    });
+    editor.onDidChangeModelContent(() => {
+      storage.setAutosave(editor.getValue());
+      scheduleValidate();
+    });
+  }catch(e){
+    console.error('Monaco failed, falling back to textarea editor', e);
+    fallbackEditor();
+  }
+}
+
+function fallbackEditor(){
+  const host = el('editor');
+  host.innerHTML = '';
+  const ta = document.createElement('textarea');
+  ta.style.cssText = 'width:100%;height:100%;background:#0a0d14;color:#e5e7eb;border:1px solid #2a3142;border-radius:6px;padding:10px;font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;';
+  ta.value = storage.getAutosave() || getInitialTemplate(currentFramework, {
+    name: 'MyPlugin',
+    author: 'YourName',
+    version: '1.0.0'
   });
-  editor.onDidChangeModelContent(() => {
-    storage.setAutosave(editor.getValue());
-    scheduleValidate();
-  });
+  host.appendChild(ta);
+
+  // Minimal editor shim
+  editor = {
+    getValue: () => ta.value,
+    setValue: (v) => { ta.value = v; storage.setAutosave(v); },
+    onDidChangeModelContent: (fn) => {
+      ta.addEventListener('input', () => { storage.setAutosave(ta.value); fn?.(); });
+    },
+    revealLineInCenter: () => {},
+    setPosition: () => {},
+    focus: () => ta.focus()
+  };
+  // Trigger initial validate
+  scheduleValidate();
 }
 
 let validateTimer;
@@ -245,9 +277,10 @@ function runChecksUI(){
     if (r.line){
       item.style.cursor = 'pointer';
       item.addEventListener('click', () => {
-        editor.revealLineInCenter(r.line);
-        editor.setPosition({ lineNumber: r.line, column: 1 });
-        editor.focus();
+        // Fallback editor won't navigate, that's OK.
+        editor.revealLineInCenter?.(r.line);
+        editor.setPosition?.({ lineNumber: r.line, column: 1 });
+        editor.focus?.();
       });
     }
     box.appendChild(item);
@@ -536,6 +569,7 @@ function handleAiError(e){
 (async function main(){
   loadSettingsToUI();
   await initMonaco();
+  bindUI();
   renderHistory();
   renderChangelog();
   scheduleValidate();
