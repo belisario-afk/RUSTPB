@@ -277,7 +277,6 @@ function runChecksUI(){
     if (r.line){
       item.style.cursor = 'pointer';
       item.addEventListener('click', () => {
-        // Fallback editor won't navigate, that's OK.
         editor.revealLineInCenter?.(r.line);
         editor.setPosition?.({ lineNumber: r.line, column: 1 });
         editor.focus?.();
@@ -332,6 +331,21 @@ function getSelectedHooks(){
   return Array.from(sel.selectedOptions || []).map(o => o.value);
 }
 
+// Heuristic: is the text likely a C# Rust plugin?
+function isLikelyCSharpPlugin(text){
+  if (!text) return false;
+  const t = String(text);
+  return /class\s+\w+\s*:\s*(RustPlugin|CarbonPlugin)\b/.test(t)
+      || /\[(Info|Plugin)\s*\(/.test(t)
+      || /\busing\s+Oxide\.Core\b/.test(t)
+      || /\busing\s+Carbon\.Core\b/.test(t);
+}
+
+function postHistory(title, content, model){
+  storage.addHistory({ ts: Date.now(), title, model, content });
+  renderHistory();
+}
+
 async function onGenerate(){
   lastAction = 'generate';
   selectTab('output');
@@ -356,21 +370,31 @@ async function onGenerate(){
       safetyMode: el('safetyModeToggle').checked,
       selectedHooks
     });
-    editor.setValue(extractCodeBlock(text) || text);
-    storage.addHistory({ ts: Date.now(), title: 'Generate Plugin', model, content: text });
-    renderHistory();
-    scheduleValidate();
-    setStatus({ model });
-    el('tokenEstimate').textContent = ai.stats.lastTokens;
-    toast('Plugin generated');
-    selectTab('editor');
+
+    const codeBlock = extractCodeBlock(text);
+    if (codeBlock && isLikelyCSharpPlugin(codeBlock)) {
+      editor.setValue(codeBlock);
+      scheduleValidate();
+      setStatus({ model });
+      el('tokenEstimate').textContent = ai.stats.lastTokens;
+      postHistory('Generate Plugin', text, model);
+      toast('Plugin generated');
+      selectTab('editor');
+    } else {
+      // Clarification or non-code response — keep editor unchanged
+      postHistory('Clarification needed', text, model);
+      setStatus({ model });
+      el('tokenEstimate').textContent = ai.stats.lastTokens;
+      toast('Model asked for clarification. See Output.', 'error');
+      selectTab('output');
+    }
   }catch(e){
     handleAiError(e);
   }
 }
 
 function extractCodeBlock(text){
-  const m = text.match(/```(?:csharp|cs)?\s*([\s\S]*?)```/i);
+  const m = text?.match(/```(?:csharp|cs)?\s*([\s\S]*?)```/i);
   return m ? m[1] : null;
 }
 
@@ -392,12 +416,19 @@ async function onRefine(){
       currentCode: code,
       codeFragment: fragments
     });
+
+    if (!/^\s*(?:@@\s*-\d+|\s*diff --git)/m.test(diff)) {
+      postHistory('Clarification needed (Refine)', diff, model);
+      toast('Model asked for clarification. See Output.', 'error');
+      selectTab('output');
+      return;
+    }
+
     el('patchPreview').value = diff;
     const impact = estimateImpact(code, diff);
     el('tokenEstimate').textContent = ai.stats.lastTokens;
     setBigChangeWarning(impact);
-    storage.addHistory({ ts: Date.now(), title: 'Refine/Improve', model, content: diff });
-    renderHistory();
+    postHistory('Refine/Improve', diff, model);
     setStatus({ model });
     toast('Refine diff ready');
   }catch(e){
@@ -422,12 +453,19 @@ async function onCreatePatch(){
       currentCode: code,
       codeFragment: fragments
     });
+
+    if (!/^\s*(?:@@\s*-\d+|\s*diff --git)/m.test(diff)) {
+      postHistory('Clarification needed (Patch)', diff, model);
+      toast('Model asked for clarification. See Output.', 'error');
+      selectTab('output');
+      return;
+    }
+
     el('patchPreview').value = diff;
     const impact = estimateImpact(code, diff);
     el('tokenEstimate').textContent = ai.stats.lastTokens;
     setBigChangeWarning(impact);
-    storage.addHistory({ ts: Date.now(), title: 'Create Patch', model, content: diff });
-    renderHistory();
+    postHistory('Create Patch', diff, model);
     setStatus({ model });
     toast('Patch diff ready');
   }catch(e){
@@ -444,15 +482,22 @@ async function onSuggestTests(){
   const fragments = settings.onlyUncertain ? buildUncertainFragments(code) : '';
 
   try{
-    const { model, plan } = await ai.suggestTests({
+    const { model, plan, raw } = await ai.suggestTests({
       modelPreference: el('modelSelect').value,
       framework: currentFramework,
       currentCode: code,
       categoryOnly: !!settings.categoryOnly,
       codeFragment: fragments
     });
-    storage.addHistory({ ts: Date.now(), title: 'Suggest Tests', model, content: JSON.stringify(plan, null, 2) });
-    renderHistory();
+
+    if (!plan || (!plan.scenarios && !plan.assertions && !plan.manual_steps)) {
+      // Probably a clarifying question or non-JSON response
+      postHistory('Clarification needed (Tests)', raw || '(no data)', model);
+      toast('Model asked for clarification. See Output.', 'error');
+      return;
+    }
+
+    postHistory('Suggest Tests', JSON.stringify(plan, null, 2), model);
     setStatus({ model });
     el('tokenEstimate').textContent = ai.stats.lastTokens;
     toast('Test plan generated');
@@ -483,8 +528,7 @@ async function onExplain(){
         setStreamingHistory('Explain Code', text);
       }
     });
-    storage.addHistory({ ts: Date.now(), title: 'Explain Code', model: el('modelSelect').value, content: text });
-    renderHistory();
+    postHistory('Explain Code', text, el('modelSelect').value);
     setStatus({ model: el('modelSelect').value });
     el('tokenEstimate').textContent = ai.stats.lastTokens;
   }catch(e){
