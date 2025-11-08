@@ -1,5 +1,7 @@
 export const templates = {
-  oxideSkeleton: (meta = {}) => `using System;
+  oxideSkeleton: (meta = {}) => {
+    const primaryPerm = (meta.permissions && meta.permissions[0]) ? meta.permissions[0] : "myplugin.use";
+    return `using System;
 using Oxide.Core;
 using Oxide.Core.Plugins;
 
@@ -11,7 +13,7 @@ using Oxide.Core.Plugins;
 public class ${sanitizeClassName(meta.name || "MyPlugin")} : RustPlugin
 {
     // Configuration & state
-    private const string PERM_USE = "${(meta.permissions || ["myplugin.use"]).[0] || "myplugin.use"}";
+    private const string PERM_USE = "${primaryPerm}";
 
     void Init()
     {
@@ -38,18 +40,20 @@ public class ${sanitizeClassName(meta.name || "MyPlugin")} : RustPlugin
         player.ChatMessage("Hello from ${sanitizeClassName(meta.name || "MyPlugin")}!");
     }
 }
-`,
+`;},
 
-  carbonSkeleton: (meta = {}) => `using Carbon.Core;
+  carbonSkeleton: (meta = {}) => {
+    const primaryPerm = (meta.permissions && meta.permissions[0]) ? meta.permissions[0] : "myplugin.use";
+    return `using Carbon.Core;
 using Carbon.Core.Attributes;
 using Carbon.Core.Logging;
 
 // NEVER delete or truncate user code. Produce minimal, explicit patches. If uncertain, ask for clarification or split changes.
 
-[Plugin(" ${meta.name || "MyCarbonPlugin"}", "${meta.author || "YourName"}", "${meta.version || "1.0.0"}" )]
+[Plugin("${meta.name || "MyCarbonPlugin"}", "${meta.author || "YourName"}", "${meta.version || "1.0.0"}")]
 public class ${sanitizeClassName(meta.name || "MyCarbonPlugin")} : CarbonPlugin
 {
-    private const string PERM_USE = "${(meta.permissions || ["myplugin.use"]).[0] || "myplugin.use"}";
+    private const string PERM_USE = "${primaryPerm}";
 
     void Init()
     {
@@ -71,7 +75,7 @@ public class ${sanitizeClassName(meta.name || "MyCarbonPlugin")} : CarbonPlugin
         player.ChatMessage("Hello from ${sanitizeClassName(meta.name || "MyCarbonPlugin")}!");
     }
 }
-`,
+`;},
 
   snippets: {
     chatCommand: `// Register a chat command

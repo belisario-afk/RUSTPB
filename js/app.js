@@ -18,6 +18,8 @@ function setStatus({ model, batch, tokens, costGuard }){
   el('statusBatch').textContent = batch ?? 0;
   el('statusTokens').textContent = tokens ?? ai.stats.lastTokens;
   el('statusCostGuard').textContent = costGuard ? 'ON' : 'OFF';
+  const rc = el('requestCount');
+  if (rc) rc.textContent = ai.stats.requests;
 }
 
 function toast(msg, type=''){
@@ -193,6 +195,7 @@ function renderSnapshots(){
     li.querySelector('[data-act="restore"]').addEventListener('click', () => {
       editor.setValue(s.content);
       toast('Snapshot restored');
+      scheduleValidate();
     });
     li.querySelector('[data-act="delete"]').addEventListener('click', () => {
       const arr = storage.getSnapshots().filter(x => x.ts !== s.ts);
@@ -263,11 +266,47 @@ function selectTab(name){
   $$('.tabpane').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
 }
 
+// Build small code fragments around validator warnings/errors to reduce tokens
+function buildUncertainFragments(code){
+  const results = runValidators(code, currentFramework)
+    .filter(r => (r.level === 'warn' || r.level === 'err') && r.line);
+  if (!results.length) return '';
+  const lines = code.split(/\r?\n/);
+  const ranges = [];
+  for (const r of results){
+    const start = Math.max(1, r.line - 20);
+    const end = Math.min(lines.length, r.line + 20);
+    ranges.push([start, end]);
+  }
+  // merge overlapping ranges
+  ranges.sort((a,b) => a[0]-b[0]);
+  const merged = [];
+  for (const rg of ranges){
+    if (!merged.length || rg[0] > merged[merged.length-1][1] + 1) merged.push([...rg]);
+    else merged[merged.length-1][1] = Math.max(merged[merged.length-1][1], rg[1]);
+  }
+  const parts = merged.map(([s,e]) => {
+    const block = lines.slice(s-1, e).join('\n');
+    return `// --- SNIPPET LINES ${s}-${e} ---
+${block}
+// --- END SNIPPET ---`;
+  });
+  return parts.join('\n\n');
+}
+
+function getSelectedHooks(){
+  const sel = el('hooksSelect');
+  return Array.from(sel.selectedOptions || []).map(o => o.value);
+}
+
 async function onGenerate(){
   lastAction = 'generate';
   selectTab('output');
-  const description = el('promptInput').value.trim();
-  if (!description) return toast('Please describe your plugin.');
+  const descriptionBase = el('promptInput').value.trim();
+  if (!descriptionBase) return toast('Please describe your plugin.');
+  const selectedHooks = getSelectedHooks();
+  const hooksText = selectedHooks.length ? `Target hooks: ${selectedHooks.join(', ')}.` : '';
+  const description = [descriptionBase, hooksText].filter(Boolean).join(' ');
   const meta = {
     name: el('pluginNameInput').value.trim() || 'MyPlugin',
     author: el('authorInput').value.trim() || 'YourName',
@@ -281,14 +320,15 @@ async function onGenerate(){
       framework: currentFramework,
       description,
       meta,
-      safetyMode: el('safetyModeToggle').checked
+      safetyMode: el('safetyModeToggle').checked,
+      selectedHooks
     });
-    // Place code in editor (generation from scratch is allowed)
     editor.setValue(extractCodeBlock(text) || text);
     storage.addHistory({ ts: Date.now(), title: 'Generate Plugin', model, content: text });
     renderHistory();
     scheduleValidate();
     setStatus({ model });
+    el('tokenEstimate').textContent = ai.stats.lastTokens;
     toast('Plugin generated');
     selectTab('editor');
   }catch(e){
@@ -308,13 +348,16 @@ async function onRefine(){
   const goals = goalsInput.split(',').map(s=>s.trim()).filter(Boolean);
   const code = editor.getValue();
   if (!code.trim()) return toast('No code to refine.');
+  const settings = storage.getSettings();
+  const fragments = settings.onlyUncertain ? buildUncertainFragments(code) : '';
 
   try{
     const { model, diff } = await ai.refinePlugin({
       modelPreference: el('modelSelect').value,
       framework: currentFramework,
       goals: goals.length ? goals : ['reliability'],
-      currentCode: code
+      currentCode: code,
+      codeFragment: fragments
     });
     el('patchPreview').value = diff;
     const impact = estimateImpact(code, diff);
@@ -335,16 +378,20 @@ async function onCreatePatch(){
   const problem = prompt('Describe the problem to fix (be specific):') || '';
   const code = editor.getValue();
   if (!code.trim()) return toast('No code to patch.');
+  const settings = storage.getSettings();
+  const fragments = settings.onlyUncertain ? buildUncertainFragments(code) : '';
 
   try{
     const { model, diff } = await ai.createPatch({
       modelPreference: el('modelSelect').value,
       framework: currentFramework,
       problem,
-      currentCode: code
+      currentCode: code,
+      codeFragment: fragments
     });
     el('patchPreview').value = diff;
     const impact = estimateImpact(code, diff);
+    el('tokenEstimate').textContent = ai.stats.lastTokens;
     setBigChangeWarning(impact);
     storage.addHistory({ ts: Date.now(), title: 'Create Patch', model, content: diff });
     renderHistory();
@@ -360,16 +407,21 @@ async function onSuggestTests(){
   selectTab('output');
   const code = editor.getValue();
   if (!code.trim()) return toast('No code to analyze.');
+  const settings = storage.getSettings();
+  const fragments = settings.onlyUncertain ? buildUncertainFragments(code) : '';
 
   try{
-    const { model, plan, raw } = await ai.suggestTests({
+    const { model, plan } = await ai.suggestTests({
       modelPreference: el('modelSelect').value,
       framework: currentFramework,
-      currentCode: code
+      currentCode: code,
+      categoryOnly: !!settings.categoryOnly,
+      codeFragment: fragments
     });
     storage.addHistory({ ts: Date.now(), title: 'Suggest Tests', model, content: JSON.stringify(plan, null, 2) });
     renderHistory();
     setStatus({ model });
+    el('tokenEstimate').textContent = ai.stats.lastTokens;
     toast('Test plan generated');
   }catch(e){
     handleAiError(e);
@@ -381,6 +433,8 @@ async function onExplain(){
   selectTab('output');
   const code = editor.getValue();
   if (!code.trim()) return toast('No code to explain.');
+  const settings = storage.getSettings();
+  const fragments = settings.onlyUncertain ? buildUncertainFragments(code) : '';
 
   try{
     let text = '';
@@ -388,16 +442,18 @@ async function onExplain(){
       modelPreference: el('modelSelect').value,
       framework: currentFramework,
       currentCode: code,
+      categoryOnly: !!settings.categoryOnly,
+      codeFragment: fragments,
       stream: true,
       onToken: (t) => {
         text += t;
-        // stream to a live entry
         setStreamingHistory('Explain Code', text);
       }
     });
     storage.addHistory({ ts: Date.now(), title: 'Explain Code', model: el('modelSelect').value, content: text });
     renderHistory();
     setStatus({ model: el('modelSelect').value });
+    el('tokenEstimate').textContent = ai.stats.lastTokens;
   }catch(e){
     handleAiError(e);
   }
@@ -473,6 +529,7 @@ function handleAiError(e){
   else if (status === 429) toast('Rate limited. Retrying may help soon.', 'error');
   else if (status === 400 && /unsupported/i.test(e?.responseText || '')) toast('Model rejected params; we automatically retried.', 'error');
   else toast(`AI error: ${e?.message || e}`, 'error');
+  setStatus({}); // refresh counters
 }
 
 // Bootstrap

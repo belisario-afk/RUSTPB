@@ -113,12 +113,12 @@ export const ai = {
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       // ChatCompletions streams as server-sent events style "data: {json}"
-      const parts = buffer.split('\n');
-      buffer = parts.pop() || '';
-      for (const line of parts){
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || '';
+      for (const line of lines){
         const m = line.match(/^data:\s*(.+)$/);
         if (!m) continue;
-        if (m[1] === '[DONE]') break;
+        if (m[1] === '[DONE]') continue;
         try{
           const json = JSON.parse(m[1]);
           const delta = json.choices?.[0]?.delta?.content || '';
@@ -147,12 +147,13 @@ CRITICAL RULES:
     };
   },
 
-  async generatePlugin({ modelPreference, framework, description, meta, safetyMode }){
+  async generatePlugin({ modelPreference, framework, description, meta, safetyMode, selectedHooks = [] }){
+    const hookList = selectedHooks.length ? `\nHooks to consider: ${selectedHooks.join(', ')}` : '';
     const messages = [
       this.systemNonDestructive(framework),
       { role: 'user', content:
 `Generate a minimal ${framework === 'carbon' ? 'Carbon' : 'Oxide/uMod'} C# plugin implementing:
-"${description}"
+"${description}"${hookList}
 
 Metadata:
 - Name: ${meta.name}
@@ -172,14 +173,16 @@ Constraints:
     return { model, text };
   },
 
-  async refinePlugin({ modelPreference, framework, goals, currentCode }){
+  async refinePlugin({ modelPreference, framework, goals, currentCode, codeFragment='' }){
+    const partialNote = codeFragment
+      ? `Only modify within the provided snippets. Output a unified diff against the original file content; do not mass-rewrite.\n---BEGIN SNIPPETS---\n${codeFragment}\n---END SNIPPETS---`
+      : 'Return a unified diff (git-style) with minimal changes.';
     const messages = [
       this.systemNonDestructive(framework),
       { role: 'user', content:
 `Refine the following plugin with conservative changes for goals: ${goals.join(', ')}
 
-Return a unified diff (git-style) with minimal changes.
-Do NOT mass rewrite. Never delete or truncate user code.
+${partialNote}
 
 ---BEGIN CURRENT CODE---
 ${currentCode}
@@ -191,7 +194,10 @@ ${currentCode}
     return { model, diff: data.choices?.[0]?.message?.content || '' };
   },
 
-  async createPatch({ modelPreference, framework, problem, currentCode }){
+  async createPatch({ modelPreference, framework, problem, currentCode, codeFragment='' }){
+    const partialNote = codeFragment
+      ? `Only touch code inside the snippets below. Produce the minimal unified diff applicable to the full file.\n---BEGIN SNIPPETS---\n${codeFragment}\n---END SNIPPETS---`
+      : 'Produce the minimal unified diff applicable to the full file.';
     const messages = [
       this.systemNonDestructive(framework),
       { role: 'user', content:
@@ -204,6 +210,8 @@ Rules:
 - Minimal explicit patches only.
 - If >20% of lines would change, split into multiple small diffs; annotate each with a short rationale in comments starting with // PATCH NOTE:
 
+${partialNote}
+
 ---BEGIN CURRENT CODE---
 ${currentCode}
 ---END CURRENT CODE---` }
@@ -214,18 +222,20 @@ ${currentCode}
     return { model, diff: data.choices?.[0]?.message?.content || '' };
   },
 
-  async suggestTests({ modelPreference, framework, currentCode }){
+  async suggestTests({ modelPreference, framework, currentCode, categoryOnly=false, codeFragment='' }){
+    const scope = codeFragment ? `Focus only on these snippets:\n---SNIPPETS---\n${codeFragment}\n---END SNIPPETS---\n` : '';
+    const brevity = categoryOnly ? 'Be terse. Prefer bullet points.' : 'Keep concise to save tokens.';
     const messages = [
       this.systemNonDestructive(framework),
       { role: 'user', content:
 `Suggest a test plan for this ${framework} Rust plugin.
-
+${scope}
 Output JSON with keys:
 - scenarios: array of scenario strings
 - assertions: array of assertion strings
 - manual_steps: array of in-game/manual steps
 
-Keep concise to save tokens.
+${brevity}
 
 ---CODE---
 ${currentCode}
@@ -240,12 +250,14 @@ ${currentCode}
     return { model, plan: json, raw };
   },
 
-  async explainCode({ modelPreference, framework, currentCode, stream=false, onToken }){
+  async explainCode({ modelPreference, framework, currentCode, categoryOnly=false, codeFragment='', stream=false, onToken }){
+    const scope = codeFragment ? `Focus only on these snippets:\n---SNIPPETS---\n${codeFragment}\n---END SNIPPETS---\n` : '';
+    const brevity = categoryOnly ? 'Be very concise; summarize by category (hooks, permissions, data IO).' : 'Keep it concise.';
     const messages = [
       this.systemNonDestructive(framework),
       { role: 'user', content:
-`Explain the following plugin. Focus on hooks used, permissions, and key behaviors. Keep it concise.
-
+`Explain the following plugin. Focus on hooks used, permissions, and key behaviors. ${brevity}
+${scope}
 ---CODE---
 ${currentCode}
 ---END---` }
